@@ -14,8 +14,6 @@ from six.moves import range
 
 from manifest.sourcefile import SourceFile
 
-here = os.path.abspath(os.path.split(__file__)[0])
-
 ERROR_MSG = """You must fix all errors; for details on how to fix them, see
 https://github.com/w3c/web-platform-tests/blob/master/docs/lint-tool.md
 
@@ -41,8 +39,6 @@ def check_path_length(repo_root, path):
         return [("PATH LENGTH", "/%s longer than maximum path length (%d > 150)" % (path, len(path) + 1), None)]
     return []
 
-def set_type(error_type, errors):
-    return [(error_type,) + error for error in errors]
 
 def parse_whitelist_file(filename):
     """
@@ -251,8 +247,9 @@ def parse_args():
     return parser.parse_args()
 
 def main():
-    from .. import localpaths
-    repo_root = localpaths.repo_root
+    here = os.path.abspath(os.path.split(__file__)[0])
+    repo_root = os.path.abspath(os.path.join(here, os.pardir, os.pardir))
+
     args = parse_args()
     paths = args.paths if args.paths else all_git_paths(repo_root)
     return lint(repo_root, paths)

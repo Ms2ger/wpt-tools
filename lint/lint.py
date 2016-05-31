@@ -1,5 +1,7 @@
 from __future__ import print_function, unicode_literals
 
+from typing import Callable, Tuple, Optional, Mapping, Set, List, Text
+
 import argparse
 import fnmatch
 import os
@@ -9,47 +11,26 @@ import sys
 
 from collections import defaultdict
 
-from six import iteritems
-from six.moves import range
+from six import iteritems, itervalues
 
-from manifest.sourcefile import SourceFile
+ERROR_MSG = ""
 
-here = os.path.abspath(os.path.split(__file__)[0])
-
-ERROR_MSG = """You must fix all errors; for details on how to fix them, see
-https://github.com/w3c/web-platform-tests/blob/master/docs/lint-tool.md
-
-However, instead of fixing a particular error, it's sometimes
-OK to add a line to the lint.whitelist file in the root of the
-web-platform-tests directory to make the lint tool ignore it.
-
-For example, to make the lint tool ignore all '%s'
-errors in the %s file,
-you could add the following line to the lint.whitelist file."
-
-%s:%s"""
-
-def all_git_paths(repo_root):
-    command_line = ["git", "ls-tree", "-r", "--name-only", "HEAD"]
-    output = subprocess.check_output(command_line, cwd=repo_root)
-    for item in output.split("\n"):
-        yield item
-
+Error = Tuple[Text, Text, Optional[int]]
+Whitelist = Mapping[bytes, Mapping[Text, Set[int]]]
 
 def check_path_length(repo_root, path):
+    # type: (bytes, bytes) -> List[Error]
     if len(path) + 1 > 150:
         return [("PATH LENGTH", "/%s longer than maximum path length (%d > 150)" % (path, len(path) + 1), None)]
     return []
 
-def set_type(error_type, errors):
-    return [(error_type,) + error for error in errors]
-
 def parse_whitelist_file(filename):
+    # type: (bytes) -> Whitelist
     """
     Parse the whitelist file at `filename`, and return the parsed structure.
     """
 
-    data = defaultdict(lambda:defaultdict(set))
+    data = defaultdict(lambda:defaultdict(set))  # type: Whitelist
 
     with open(filename) as f:
         for line in f:
@@ -58,17 +39,20 @@ def parse_whitelist_file(filename):
                 continue
             parts = [item.strip() for item in line.split(":")]
             if len(parts) == 2:
-                parts.append(None)
+                error_type, file_match = parts
+                line_number = None
             else:
-                parts[-1] = int(parts[-1])
+                error_type, file_match, line_nr = parts
+                line_number = int(line_nr)
 
-            error_type, file_match, line_number = parts
-            data[file_match][error_type].add(line_number)
+            file_match_bytes = file_match.encode('utf-8')
+            data[file_match_bytes][error_type].add(line_number)
 
     return data
 
 
 def filter_whitelist_errors(data, path, errors):
+    # type: (Whitelist, bytes, List[Error]) -> List[Error]
     """
     Filter out those errors that are whitelisted in `data`.
     """
@@ -87,153 +71,13 @@ def filter_whitelist_errors(data, path, errors):
 
     return [item for i, item in enumerate(errors) if not whitelisted[i]]
 
-class Regexp(object):
-    pattern = None
-    file_extensions = None
-    error = None
-    _re = None
-
-    def __init__(self):
-        self._re = re.compile(self.pattern)
-
-    def applies(self, path):
-        return (self.file_extensions is None or
-                os.path.splitext(path)[1] in self.file_extensions)
-
-    def search(self, line):
-        return self._re.search(line)
-
-class TrailingWhitespaceRegexp(Regexp):
-    pattern = b"[ \t\f\v]$"
-    error = "TRAILING WHITESPACE"
-
-class TabsRegexp(Regexp):
-    pattern = b"^\t"
-    error = "INDENT TABS"
-
-class CRRegexp(Regexp):
-    pattern = b"\r$"
-    error = "CR AT EOL"
-
-class W3CTestOrgRegexp(Regexp):
-    pattern = b"w3c\-test\.org"
-    error = "W3C-TEST.ORG"
-
-class Webidl2Regexp(Regexp):
-    pattern = b"webidl2\.js"
-    error = "WEBIDL2.JS"
-
-class ConsoleRegexp(Regexp):
-    pattern = b"console\.[a-zA-Z]+\s*\("
-    error = "CONSOLE"
-    file_extensions = [".html", ".htm", ".js", ".xht", ".html", ".svg"]
-
-class PrintRegexp(Regexp):
-    pattern = b"print(?:\s|\s*\()"
-    error = "PRINT STATEMENT"
-    file_extensions = [".py"]
-
-regexps = [item() for item in
-           [TrailingWhitespaceRegexp,
-            TabsRegexp,
-            CRRegexp,
-            W3CTestOrgRegexp,
-            Webidl2Regexp,
-            ConsoleRegexp,
-            PrintRegexp]]
-
-def check_regexp_line(repo_root, path, f):
-    errors = []
-
-    applicable_regexps = [regexp for regexp in regexps if regexp.applies(path)]
-
-    for i, line in enumerate(f):
-        for regexp in applicable_regexps:
-            if regexp.search(line):
-                errors.append((regexp.error, "%s line %i" % (path, i+1), i+1))
-
-    return errors
-
-def check_parsed(repo_root, path, f):
-    source_file = SourceFile(repo_root, path, "/")
-
-    errors = []
-
-    if source_file.name_is_non_test or source_file.name_is_manual:
-        return []
-
-    if source_file.markup_type is None:
-        return []
-
-    if source_file.root is None:
-        return [("PARSE-FAILED", "Unable to parse file %s" % path, None)]
-
-    if len(source_file.timeout_nodes) > 1:
-        errors.append(("MULTIPLE-TIMEOUT", "%s more than one meta name='timeout'" % path, None))
-
-    for timeout_node in source_file.timeout_nodes:
-        timeout_value = timeout_node.attrib.get("content", "").lower()
-        if timeout_value != "long":
-            errors.append(("INVALID-TIMEOUT", "%s invalid timeout value %s" % (path, timeout_value), None))
-
-    if source_file.testharness_nodes:
-        if len(source_file.testharness_nodes) > 1:
-            errors.append(("MULTIPLE-TESTHARNESS",
-                           "%s more than one <script src='/resources/testharness.js'>" % path, None))
-
-        testharnessreport_nodes = source_file.root.findall(".//{http://www.w3.org/1999/xhtml}script[@src='/resources/testharnessreport.js']")
-        if not testharnessreport_nodes:
-            errors.append(("MISSING-TESTHARNESSREPORT",
-                           "%s missing <script src='/resources/testharnessreport.js'>" % path, None))
-        else:
-            if len(testharnessreport_nodes) > 1:
-                errors.append(("MULTIPLE-TESTHARNESSREPORT",
-                               "%s more than one <script src='/resources/testharnessreport.js'>" % path, None))
-
-        for element in source_file.variant_nodes:
-            if "content" not in element.attrib:
-                errors.append(("VARIANT-MISSING",
-                               "%s has <meta name=variant> missing 'content' attribute" % path, None))
-            else:
-                variant = element.attrib["content"]
-                if variant != "" and variant[0] not in ("?", "#"):
-                    errors.append(("MALFORMED-VARIANT",
-                               "%s <meta name=variant> 'content' attribute must be the empty string or start with '?' or '#'" % path, None))
-
-        seen_elements = {"timeout": False,
-                         "testharness": False,
-                         "testharnessreport": False}
-        required_elements = [key for key, value in {"testharness": True,
-                                                    "testharnessreport": len(testharnessreport_nodes) > 0,
-                                                    "timeout": len(source_file.timeout_nodes) > 0}.items()
-                             if value]
-
-        for elem in source_file.root.iter():
-            if source_file.timeout_nodes and elem == source_file.timeout_nodes[0]:
-                seen_elements["timeout"] = True
-                if seen_elements["testharness"]:
-                    errors.append(("LATE-TIMEOUT",
-                                   "%s <meta name=timeout> seen after testharness.js script" % path, None))
-
-            elif elem == source_file.testharness_nodes[0]:
-                seen_elements["testharness"] = True
-
-            elif testharnessreport_nodes and elem == testharnessreport_nodes[0]:
-                seen_elements["testharnessreport"] = True
-                if not seen_elements["testharness"]:
-                    errors.append(("EARLY-TESTHARNESSREPORT",
-                                   "%s testharnessreport.js script seen before testharness.js script" % path, None))
-
-            if all(seen_elements[name] for name in required_elements):
-                break
-
-    return errors
-
 def output_errors(errors):
+    # type: (List[Error]) -> None
     for error_type, error, line_number in errors:
         print("%s: %s" % (error_type, error))
 
 def output_error_count(error_count):
+    # type: (defaultdict[Text, int]) -> None
     if not error_count:
         return
 
@@ -244,27 +88,17 @@ def output_error_count(error_count):
     else:
         print("There were %d errors (%s)" % (count, by_type))
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("paths", nargs="*",
-                        help="List of paths to lint")
-    return parser.parse_args()
-
-def main():
-    from .. import localpaths
-    repo_root = localpaths.repo_root
-    args = parse_args()
-    paths = args.paths if args.paths else all_git_paths(repo_root)
-    return lint(repo_root, paths)
 
 def lint(repo_root, paths):
-    error_count = defaultdict(int)
+    # type: (bytes, List[bytes]) -> int
+    error_count = defaultdict(int)  # type: defaultdict[Text, int]
     last = None
 
-    whitelist = parse_whitelist_file(os.path.join(repo_root, "lint.whitelist"))
+    whitelist = parse_whitelist_file(os.path.join(repo_root, b"lint.whitelist"))
 
-    def run_lint(path, fn, last, *args):
-        errors = filter_whitelist_errors(whitelist, path, fn(repo_root, path, *args))
+    def run_lint(path, fn, last):
+        # type: (bytes, Callable[[bytes, bytes], List[Error]], Optional[Tuple[Text, bytes]]) -> Optional[Tuple[Text, bytes]]
+        errors = filter_whitelist_errors(whitelist, path, fn(repo_root, path))
         if errors:
             last = (errors[-1][0], path)
 
@@ -280,21 +114,9 @@ def lint(repo_root, paths):
         for path_fn in path_lints:
             last = run_lint(path, path_fn, last)
 
-        if not os.path.isdir(abs_path):
-            with open(abs_path) as f:
-                for file_fn in file_lints:
-                    last = run_lint(path, file_fn, last, f)
-                    f.seek(0)
-
     output_error_count(error_count)
     if error_count:
         print(ERROR_MSG % (last[0], last[1], last[0], last[1]))
-    return sum(error_count.itervalues())
+    return sum(itervalues(error_count))
 
-path_lints = [check_path_length]
-file_lints = [check_regexp_line, check_parsed]
-
-if __name__ == "__main__":
-    error_count = main()
-    if error_count > 0:
-        sys.exit(1)
+path_lints = [check_path_length]  # type: List[Callable[[bytes, bytes], List[Error] ]]

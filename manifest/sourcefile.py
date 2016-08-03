@@ -90,11 +90,19 @@ class SourceFile(object):
             file_obj = open(self.path, 'rb')
         return file_obj
 
+    def is_dir(self):
+        if self.use_committed:
+            git = vcs.get_git_func(os.path.dirname(__file__))
+            blob = git("ls-tree", "-d", "HEAD", self.rel_path)
+            return blob != b""
+
+        return os.path.isdir(self.rel_path)
+
     @property
     def name_is_non_test(self):
         """Check if the file name matches the conditions for the file to
         be a non-test file"""
-        return (os.path.isdir(self.rel_path) or
+        return (self.is_dir() or
                 self.name_prefix("MANIFEST") or
                 self.filename.startswith(".") or
                 is_blacklisted(self.url))

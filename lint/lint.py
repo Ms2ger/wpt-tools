@@ -12,7 +12,8 @@ import sys
 
 from collections import defaultdict
 
-from ..localpaths import repo_root
+#from ..localpaths import repo_root
+repo_root = ""
 
 from manifest.sourcefile import SourceFile
 from six import iteritems, itervalues

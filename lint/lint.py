@@ -1,5 +1,7 @@
 from __future__ import print_function, unicode_literals
 
+from typing import Callable, Tuple, Optional, Mapping, Set, List, Text, BinaryIO
+
 import abc
 import argparse
 import ast
@@ -15,7 +17,7 @@ from collections import defaultdict
 #from ..localpaths import repo_root
 repo_root = ""
 
-from manifest.sourcefile import SourceFile
+#from manifest.sourcefile import SourceFile
 from six import iteritems, itervalues
 from six.moves import range
 
@@ -93,10 +95,9 @@ def filter_whitelist_errors(data, path, errors):
     return [item for i, item in enumerate(errors) if not whitelisted[i]]
 
 class Regexp(object):
-    pattern = None
-    file_extensions = None
-    error = None
-    _re = None
+    pattern = None  # type: Optional[bytes]
+    file_extensions = None  # type: Optional[List[Text]]
+    error = None  # type: Optional[Text]
 
     def __init__(self):
         self._re = re.compile(self.pattern)
@@ -256,8 +257,8 @@ def check_parsed(repo_root, path, f):
 
 class ASTCheck(object):
     __metaclass__ = abc.ABCMeta
-    error = None
-    description = None
+    error = None  # type: Optional[Text]
+    description = None  # type: Optional[Text]
 
     @abc.abstractmethod
     def check(self, root):
